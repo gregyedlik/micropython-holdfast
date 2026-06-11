@@ -1,0 +1,13 @@
+{
+  "urls": [
+    ["holdfast/__init__.py", "holdfast/__init__.py"],
+    ["holdfast/net.py", "holdfast/net.py"],
+    ["holdfast/mqtt.py", "holdfast/mqtt.py"],
+    ["holdfast/ota.py", "holdfast/ota.py"],
+    ["holdfast/supervisor.py", "holdfast/supervisor.py"]
+  ],
+  "deps": [
+    ["umqtt.simple", "latest"]
+  ],
+  "version": "0.1.0"
+}

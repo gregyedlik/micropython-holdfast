@@ -1,0 +1,15 @@
+# Copy to config.py on the device and fill in your values.
+# config.py is never overwritten by holdfast's OTA updater.
+
+WIFI_SSID = "your-ssid"
+WIFI_PASS = "your-password"
+
+MQTT_HOST = "broker.example.org"
+MQTT_PORT = 1883
+MQTT_USER = None
+MQTT_PASS = None
+TOPIC_PREFIX = "demo/device1"
+
+# Server exposing <OTA_BASE>/manifest and <OTA_BASE>/files/<name>
+OTA_BASE = "https://example.org/api/ota/demo"
+OTA_CHECK_INTERVAL = 21600  # seconds
