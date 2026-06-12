@@ -1,7 +1,7 @@
 # holdfast
 
 Resilient WiFi + MQTT + OTA scaffolding for unattended MicroPython devices
-(Raspberry Pi Pico W / Pico 2 W and friends).
+(Raspberry Pi Pico W / Pico 2 W, ESP32, and friends).
 
 A *holdfast* is the anchor that keeps kelp gripping its rock through every
 storm. This library does the same for a microcontroller that has to sit in a
@@ -12,9 +12,12 @@ lost it, update itself remotely, and recover from its own bad updates.
 
 - **WiFi management** (`holdfast.net.WifiManager`) — async connect with a
   per-attempt timeout, and **radio power-cycling** after failed attempts.
-  The CYW43 WiFi chip can wedge in a state where retrying through the normal
-  API never recovers; cycling `active(False)`/`active(True)` clears it
-  without rebooting the board.
+  WiFi chips (the Pico W's CYW43, the ESP32 radio) can wedge in a state
+  where retrying through the normal API never recovers; cycling
+  `active(False)`/`active(True)` clears it without rebooting the board.
+  An optional `pm=` argument sets the radio's power-management mode —
+  pass `network.WLAN.PM_NONE` on mains-powered devices, where the default
+  modem power-save is a common source of dropped packets.
 - **MQTT link management** (`holdfast.mqtt.MqttLink`) — explicit reconnect
   with exponential backoff (2 s → 60 s), a keepalive ping task that detects
   dead connections early, an incoming-message pump with callback dispatch

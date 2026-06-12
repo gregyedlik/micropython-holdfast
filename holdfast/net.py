@@ -1,10 +1,11 @@
 """WiFi connection manager for unattended MicroPython devices.
 
-The WiFi chip (CYW43 on the Pico W boards) can wedge: connect() never
-associates no matter how long you wait, and retrying through the same
-stuck firmware is useless. WifiManager therefore power-cycles the radio
-(active(False) -> active(True)) after every failed attempt, which clears
-the chip's internal state without rebooting the board.
+The WiFi chip (CYW43 on the Pico W boards, the radio on ESP32) can wedge:
+connect() never associates no matter how long you wait, and retrying
+through the same stuck firmware is useless. WifiManager therefore
+power-cycles the radio (active(False) -> active(True)) after every failed
+attempt, which clears the chip's internal state without rebooting the
+board.
 
 All waits are async so the rest of the application keeps running while
 the network is down.
@@ -18,18 +19,41 @@ import uasyncio as asyncio
 
 class WifiManager:
     def __init__(self, ssid, password, hostname=None, led=None, wdt=None,
-                 attempt_timeout_s=20):
+                 attempt_timeout_s=20, pm=None):
+        """pm: optional WiFi power-management mode applied after every
+        radio activation (e.g. network.WLAN.PM_NONE on mains-powered
+        devices — the default modem power-save is a common source of
+        dropped packets, especially on ESP32). Silently ignored on ports
+        without pm support."""
         self._ssid = ssid
         self._password = password
         self._hostname = hostname
         self._led = led
         self._wdt = wdt
         self._timeout_s = attempt_timeout_s
+        self._pm = pm
         self.wlan = network.WLAN(network.STA_IF)
 
     def _feed(self):
         if self._wdt:
             self._wdt.feed()
+
+    def _apply_pm(self):
+        if self._pm is None:
+            return
+        try:
+            self.wlan.config(pm=self._pm)
+        except Exception:
+            pass  # port or driver without pm support
+
+    def _radio_off(self):
+        # disconnect() raises on an inactive interface on some ports
+        # (ESP32); the goal is just a cold radio, so ignore it.
+        try:
+            self.wlan.disconnect()
+        except Exception:
+            pass
+        self.wlan.active(False)
 
     def isconnected(self):
         return self.wlan.isconnected()
@@ -47,6 +71,7 @@ class WifiManager:
         if self._hostname:
             network.hostname(self._hostname)
         self.wlan.active(True)
+        self._apply_pm()
         if self.wlan.isconnected():
             if self._led:
                 self._led.on()
@@ -58,7 +83,7 @@ class WifiManager:
         while not self.wlan.isconnected():
             self._feed()
             if self._led:
-                self._led.toggle()
+                self._led.value(not self._led.value())
             await asyncio.sleep_ms(500)
             if time.ticks_diff(deadline, time.ticks_ms()) <= 0:
                 break
@@ -70,8 +95,7 @@ class WifiManager:
             return True
 
         print("[wifi] timed out after %ds — cycling radio" % self._timeout_s)
-        self.wlan.disconnect()
-        self.wlan.active(False)
+        self._radio_off()
         if self._led:
             self._led.off()
         await asyncio.sleep(2)
@@ -84,8 +108,7 @@ class WifiManager:
         print("[wifi] lost — reconnecting")
         if self._led:
             self._led.off()
-        self.wlan.disconnect()
-        self.wlan.active(False)
+        self._radio_off()
         await asyncio.sleep(2)
         return await self.connect()
 

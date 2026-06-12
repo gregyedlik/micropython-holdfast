@@ -96,6 +96,11 @@ class Pin:
     def toggle(self):
         self.state ^= 1
 
+    def value(self, v=None):
+        if v is None:
+            return self.state
+        self.state = 1 if v else 0
+
     def init(self, *args, **kwargs):
         pass
 
@@ -122,6 +127,7 @@ class WLAN:
         self._connected = False
         self.will_connect = True  # set False to simulate an unreachable AP
         self.cycles = 0           # radio power-cycles observed
+        self.pm = None            # last power-management mode configured
 
     def active(self, value=None):
         if value is None:
@@ -140,7 +146,15 @@ class WLAN:
             self._connected = True
 
     def disconnect(self):
+        # The ESP32 port raises when the interface is inactive; emulate
+        # that so the library's guards are exercised by the tests.
+        if not self._active:
+            raise OSError("Wifi Not Started")
         self._connected = False
+
+    def config(self, **kwargs):
+        if "pm" in kwargs:
+            self.pm = kwargs["pm"]
 
     def ifconfig(self):
         return ("192.168.1.50", "255.255.255.0", "192.168.1.1", "8.8.8.8")
