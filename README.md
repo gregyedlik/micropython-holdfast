@@ -30,6 +30,10 @@ lost it, update itself remotely, and recover from its own bad updates.
   keepalive cannot: a half-open subscribe socket, or a broker that is up
   while the service behind it is down. Essential for devices that *receive*
   commands.
+- **JSON command dispatch** (`holdfast.commands.JsonCommandHandler`) —
+  subscribe to one exact MQTT command topic, validate JSON commands with an
+  `action`, dispatch them to registered handlers, suppress duplicate command
+  IDs, and publish retained command status.
 - **OTA updates with rollback** (`holdfast.ota`) — manifest-driven file
   updates over raw-socket HTTP(S), all-or-nothing download, `.bak` backups,
   and boot-attempt counting: if a new version fails to boot 3 times, the

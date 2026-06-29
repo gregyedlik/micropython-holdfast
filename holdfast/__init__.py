@@ -5,6 +5,7 @@ Modules (import what you need; nothing is imported eagerly to save RAM):
 
     holdfast.net         WifiManager — connect/ensure with radio cycling
     holdfast.mqtt        MqttLink, AckHeartbeat — managed broker connection
+    holdfast.commands    JsonCommandHandler — exact-topic JSON commands
     holdfast.ota         OTA + boot-time rollback helpers
     holdfast.supervisor  run() — reboot if any task dies
 """
