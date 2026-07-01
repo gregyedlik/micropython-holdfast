@@ -69,6 +69,14 @@ class TestWifiManager(unittest.TestCase):
         finally:
             machine.Pin.toggle = lambda self: setattr(self, "state", self.state ^ 1)
 
+    def test_reconnect_cycles_radio_then_connects(self):
+        wifi = WifiManager("ssid", "pass")
+        real_asyncio.run(wifi.connect())
+
+        self.assertTrue(real_asyncio.run(wifi.reconnect("test reset")))
+        self.assertTrue(wifi.isconnected())
+        self.assertEqual(wifi.wlan.cycles, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

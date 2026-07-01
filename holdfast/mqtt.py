@@ -5,6 +5,7 @@ Wraps umqtt.simple with explicit connection management:
 - single-attempt connect(), async ensure() with exponential backoff
 - keepalive_task() pings the broker to detect dead connections early
 - pump_task() polls for incoming messages and dispatches callbacks
+- manager_task() can force a WiFi radio cycle after repeated upstream failures
 - retained latest-value publishing (publish_latest), including clearing
   retained topics by updating a value to None
 - AckHeartbeat: application-level liveness requiring a server ACK
@@ -46,6 +47,7 @@ class MqttLink:
         self._meta = {}        # suffix (str) -> payload (str)
         self._pending_clear = set()
         self._cleared = set()
+        self._wifi_cycle_reason = None
 
     def _feed(self):
         if self._wdt:
@@ -75,6 +77,21 @@ class MqttLink:
         except Exception:
             pass
         self.connected = False
+
+    def request_wifi_cycle(self, reason):
+        """Ask manager_task() to power-cycle WiFi before reconnecting.
+
+        Use this when the link above WiFi is repeatedly unhealthy while the
+        WiFi driver still reports an association. On Pico W boards that can
+        happen after upstream router/modem outages: cycling the CYW43 radio is
+        cheaper than rebooting and clears stale network state.
+        """
+        self._wifi_cycle_reason = reason or "connectivity failure"
+
+    def _consume_wifi_cycle_request(self):
+        reason = self._wifi_cycle_reason
+        self._wifi_cycle_reason = None
+        return reason
 
     async def ensure(self):
         """Reconnect if needed. Sleeps the (exponential) backoff after a
@@ -183,13 +200,33 @@ class MqttLink:
 
     # -- tasks --------------------------------------------------------------
 
-    async def manager_task(self, wifi, interval_s=5):
+    async def manager_task(self, wifi, interval_s=5,
+                           wifi_cycle_after_mqtt_failures=5):
         """Keep WiFi and the broker connection alive. `wifi` is a
         holdfast.net.WifiManager."""
+        mqtt_failures = 0
         while True:
             self._feed()
             if await wifi.ensure():
-                await self.ensure()
+                requested_cycle = self._consume_wifi_cycle_request()
+                if requested_cycle and wifi.isconnected():
+                    self.disconnect()
+                    if not await wifi.reconnect(requested_cycle):
+                        await asyncio.sleep(interval_s)
+                        continue
+
+                if await self.ensure():
+                    mqtt_failures = 0
+                else:
+                    mqtt_failures += 1
+                    if (wifi_cycle_after_mqtt_failures
+                            and mqtt_failures >= wifi_cycle_after_mqtt_failures
+                            and wifi.isconnected()):
+                        print("[mqtt] %d consecutive reconnect failures — cycling WiFi radio"
+                              % mqtt_failures)
+                        mqtt_failures = 0
+                        self.disconnect()
+                        await wifi.reconnect("MQTT reconnect failures")
             await asyncio.sleep(interval_s)
 
     async def pump_task(self, interval_ms=100):
@@ -234,17 +271,20 @@ class AckHeartbeat:
     """
 
     def __init__(self, link, topic, ack_topic, payload_fn,
-                 interval_s=10, timeout_s=25, on_first_ack=None):
+                 interval_s=10, timeout_s=25, on_first_ack=None,
+                 wifi_cycle_after_timeouts=3):
         self._link = link
         self._topic = topic
         self._payload_fn = payload_fn
         self._interval_s = interval_s
         self._timeout_s = timeout_s
         self._on_first_ack = on_first_ack
+        self._wifi_cycle_after_timeouts = wifi_cycle_after_timeouts
         self._seq = 0
         self._awaiting_seq = None
         self._awaiting_since = 0
         self._acked_once = False
+        self._consecutive_timeouts = 0
         link.subscribe(ack_topic, self._on_ack)
         link.on_connect(self._reset)
 
@@ -263,6 +303,7 @@ class AckHeartbeat:
             print("[hb] ignoring ack seq %s (awaiting %s)" % (seq, self._awaiting_seq))
             return
         self._awaiting_seq = None
+        self._consecutive_timeouts = 0
         if not self._acked_once:
             self._acked_once = True
             if self._on_first_ack:
@@ -281,6 +322,12 @@ class AckHeartbeat:
                     print("[hb] ACK timeout for seq %d — marking link dead"
                           % self._awaiting_seq)
                     self._awaiting_seq = None
+                    self._consecutive_timeouts += 1
+                    if (self._wifi_cycle_after_timeouts
+                            and self._consecutive_timeouts >= self._wifi_cycle_after_timeouts):
+                        self._link.request_wifi_cycle(
+                            "%d heartbeat ACK timeouts" % self._consecutive_timeouts)
+                        self._consecutive_timeouts = 0
                     self._link.disconnect()
             elif (self._link.connected
                     and time.ticks_diff(now, last_sent) >= self._interval_s * 1000):

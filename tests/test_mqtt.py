@@ -5,6 +5,7 @@ import stub_env
 from stub_env import clock, spin, real_asyncio
 
 from holdfast.mqtt import MqttLink, AckHeartbeat
+from holdfast.net import WifiManager
 
 
 def make_link(**kwargs):
@@ -119,19 +120,70 @@ class TestMqttLink(unittest.TestCase):
         topics = [t for t, p, r, q in link._client.published]
         self.assertNotIn("t/dev/temp", topics)
 
+    def test_manager_cycles_wifi_after_repeated_mqtt_failures(self):
+        wifi = WifiManager("ssid", "pass")
+        link = make_link()
+        link._client.fail_connect = True
+
+        async def scenario():
+            self.assertTrue(await wifi.connect())
+            cycles_before = wifi.wlan.cycles
+            task = real_asyncio.ensure_future(
+                link.manager_task(
+                    wifi,
+                    interval_s=0,
+                    wifi_cycle_after_mqtt_failures=2,
+                )
+            )
+            try:
+                for _ in range(30):
+                    if wifi.wlan.cycles > cycles_before:
+                        return
+                    await spin(1)
+                self.fail("manager_task did not cycle WiFi")
+            finally:
+                task.cancel()
+
+        real_asyncio.run(scenario())
+        self.assertGreaterEqual(wifi.wlan.cycles, 1)
+
+    def test_manager_honors_wifi_cycle_request(self):
+        wifi = WifiManager("ssid", "pass")
+        link = make_link()
+
+        async def scenario():
+            self.assertTrue(await wifi.connect())
+            cycles_before = wifi.wlan.cycles
+            link.request_wifi_cycle("test request")
+            task = real_asyncio.ensure_future(link.manager_task(wifi, interval_s=0))
+            try:
+                for _ in range(10):
+                    if wifi.wlan.cycles > cycles_before:
+                        return
+                    await spin(1)
+                self.fail("manager_task did not honor WiFi cycle request")
+            finally:
+                task.cancel()
+
+        real_asyncio.run(scenario())
+        self.assertGreaterEqual(wifi.wlan.cycles, 1)
+
 
 class TestAckHeartbeat(unittest.TestCase):
     def make(self, link, **kwargs):
         firsts = []
+        settings = {
+            "interval_s": 10,
+            "timeout_s": 25,
+            "on_first_ack": lambda: firsts.append(1),
+        }
+        settings.update(kwargs)
         hb = AckHeartbeat(
             link,
             b"hb",
             b"hb/ack",
             lambda seq: json.dumps({"seq": seq}),
-            interval_s=10,
-            timeout_s=25,
-            on_first_ack=lambda: firsts.append(1),
-            **kwargs
+            **settings
         )
         return hb, firsts
 
@@ -197,6 +249,30 @@ class TestAckHeartbeat(unittest.TestCase):
         self.assertFalse(link.connected)
         self.assertEqual(firsts, [])
         self.assertIsNone(hb._awaiting_seq)
+
+    def test_repeated_ack_timeouts_request_wifi_cycle(self):
+        link = make_link()
+        hb, firsts = self.make(link, interval_s=1, timeout_s=1,
+                               wifi_cycle_after_timeouts=2)
+        link.connect()
+
+        async def scenario():
+            task = real_asyncio.ensure_future(hb.run())
+            try:
+                while link.connected:
+                    await spin(1)
+                self.assertIsNone(link._consume_wifi_cycle_request())
+
+                link.connect()
+                while link.connected:
+                    await spin(1)
+                reason = link._consume_wifi_cycle_request()
+                self.assertIn("heartbeat ACK timeouts", reason)
+            finally:
+                task.cancel()
+
+        real_asyncio.run(scenario())
+        self.assertEqual(firsts, [])
 
     def test_reconnect_clears_inflight_heartbeat(self):
         link = make_link()

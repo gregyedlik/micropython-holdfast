@@ -61,6 +61,21 @@ class WifiManager:
     def ip(self):
         return self.wlan.ifconfig()[0] if self.wlan.isconnected() else None
 
+    async def cycle_radio(self, reason=None):
+        """Power-cycle the WiFi radio without immediately reconnecting."""
+        self._feed()
+        if reason:
+            print("[wifi] cycling radio — %s" % reason)
+        self._radio_off()
+        if self._led:
+            self._led.off()
+        await asyncio.sleep(2)
+
+    async def reconnect(self, reason=None):
+        """Power-cycle the WiFi radio, then make one connection attempt."""
+        await self.cycle_radio(reason)
+        return await self.connect()
+
     async def connect(self):
         """One connection attempt with timeout.
 
@@ -95,10 +110,7 @@ class WifiManager:
             return True
 
         print("[wifi] timed out after %ds — cycling radio" % self._timeout_s)
-        self._radio_off()
-        if self._led:
-            self._led.off()
-        await asyncio.sleep(2)
+        await self.cycle_radio()
         return False
 
     async def ensure(self):
@@ -106,11 +118,7 @@ class WifiManager:
         if self.wlan.isconnected():
             return True
         print("[wifi] lost — reconnecting")
-        if self._led:
-            self._led.off()
-        self._radio_off()
-        await asyncio.sleep(2)
-        return await self.connect()
+        return await self.reconnect()
 
     async def wait_connected(self):
         """Retry until connected. Only returns once online."""

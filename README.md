@@ -21,15 +21,17 @@ lost it, update itself remotely, and recover from its own bad updates.
 - **MQTT link management** (`holdfast.mqtt.MqttLink`) — explicit reconnect
   with exponential backoff (2 s → 60 s), a keepalive ping task that detects
   dead connections early, an incoming-message pump with callback dispatch
-  that survives reconnects, and retained latest-value publishing (set a
-  value to `None` to clear its retained topic). Built on `umqtt.simple` on
+  that survives reconnects, forced WiFi radio cycling after repeated upstream
+  MQTT failures, and retained latest-value publishing (set a value to `None`
+  to clear its retained topic). Built on `umqtt.simple` on
   purpose: `umqtt.robust`'s auto-reconnect blocks the event loop in an
   unbounded retry and fights any external connection manager.
 - **Application-level liveness** (`holdfast.mqtt.AckHeartbeat`) — publish a
   heartbeat, require the *server* to ACK it. This catches what transport
   keepalive cannot: a half-open subscribe socket, or a broker that is up
-  while the service behind it is down. Essential for devices that *receive*
-  commands.
+  while the service behind it is down. Repeated ACK timeouts ask the MQTT
+  manager to cycle the WiFi radio even if the driver still reports connected.
+  Essential for devices that *receive* commands.
 - **JSON command dispatch** (`holdfast.commands.JsonCommandHandler`) —
   subscribe to one exact MQTT command topic, validate JSON commands with an
   `action`, dispatch them to registered handlers, suppress duplicate command
