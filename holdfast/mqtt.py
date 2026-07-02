@@ -262,7 +262,9 @@ class AckHeartbeat:
     Detects failures that transport keepalive cannot: a half-open
     subscribe socket, or a broker that is up while the server behind it
     is down. On ACK timeout the link is marked dead so the manager
-    reconnects.
+    reconnects. If reset_after_no_ack_s is set, the device reboots when
+    that many seconds pass without any successful ACK, even if the event
+    loop is still alive and retrying.
 
     payload_fn(seq) must return the heartbeat payload (str or bytes).
     The ACK message must be JSON containing {"seq": <same seq>}.
@@ -272,7 +274,8 @@ class AckHeartbeat:
 
     def __init__(self, link, topic, ack_topic, payload_fn,
                  interval_s=10, timeout_s=25, on_first_ack=None,
-                 wifi_cycle_after_timeouts=3):
+                 wifi_cycle_after_timeouts=3,
+                 reset_after_no_ack_s=None):
         self._link = link
         self._topic = topic
         self._payload_fn = payload_fn
@@ -280,10 +283,13 @@ class AckHeartbeat:
         self._timeout_s = timeout_s
         self._on_first_ack = on_first_ack
         self._wifi_cycle_after_timeouts = wifi_cycle_after_timeouts
+        self._reset_after_no_ack_s = reset_after_no_ack_s
         self._seq = 0
         self._awaiting_seq = None
         self._awaiting_since = 0
         self._acked_once = False
+        self._last_ack_ms = None
+        self._started_ms = None
         self._consecutive_timeouts = 0
         link.subscribe(ack_topic, self._on_ack)
         link.on_connect(self._reset)
@@ -303,6 +309,7 @@ class AckHeartbeat:
             print("[hb] ignoring ack seq %s (awaiting %s)" % (seq, self._awaiting_seq))
             return
         self._awaiting_seq = None
+        self._last_ack_ms = time.ticks_ms()
         self._consecutive_timeouts = 0
         if not self._acked_once:
             self._acked_once = True
@@ -315,8 +322,20 @@ class AckHeartbeat:
     async def run(self):
         # Backdate so the first heartbeat goes out immediately.
         last_sent = time.ticks_add(time.ticks_ms(), -self._interval_s * 1000)
+        self._started_ms = time.ticks_ms()
         while True:
             now = time.ticks_ms()
+            if self._reset_after_no_ack_s:
+                last_ok_ms = self._last_ack_ms
+                if last_ok_ms is None:
+                    last_ok_ms = self._started_ms
+                elapsed_ms = time.ticks_diff(now, last_ok_ms)
+                if elapsed_ms >= self._reset_after_no_ack_s * 1000:
+                    print("[hb] no successful ACK for %ds — resetting"
+                          % self._reset_after_no_ack_s)
+                    import machine
+                    machine.reset()
+
             if self._awaiting_seq is not None:
                 if time.ticks_diff(now, self._awaiting_since) > self._timeout_s * 1000:
                     print("[hb] ACK timeout for seq %d — marking link dead"

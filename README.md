@@ -31,7 +31,9 @@ lost it, update itself remotely, and recover from its own bad updates.
   keepalive cannot: a half-open subscribe socket, or a broker that is up
   while the service behind it is down. Repeated ACK timeouts ask the MQTT
   manager to cycle the WiFi radio even if the driver still reports connected.
-  Essential for devices that *receive* commands.
+  Optionally, `reset_after_no_ack_s` hard-resets the device after a long
+  end-to-end outage while the firmware is still alive and retrying. Essential
+  for devices that *receive* commands.
 - **JSON command dispatch** (`holdfast.commands.JsonCommandHandler`) —
   subscribe to one exact MQTT command topic, validate JSON commands with an
   `action`, dispatch them to registered handlers, suppress duplicate command

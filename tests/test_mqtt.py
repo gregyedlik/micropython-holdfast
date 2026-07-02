@@ -274,6 +274,42 @@ class TestAckHeartbeat(unittest.TestCase):
         real_asyncio.run(scenario())
         self.assertEqual(firsts, [])
 
+    def test_no_ack_reset_policy_calls_machine_reset(self):
+        link = make_link()
+        hb, firsts = self.make(link, interval_s=1, timeout_s=1,
+                               reset_after_no_ack_s=5)
+        link.connect()
+
+        async def scenario():
+            task = real_asyncio.ensure_future(hb.run())
+            with self.assertRaises(stub_env.ResetCalled):
+                await task
+
+        real_asyncio.run(scenario())
+        self.assertEqual(firsts, [])
+
+    def test_ack_resets_no_ack_reset_timer(self):
+        link = make_link()
+        hb, firsts = self.make(link, interval_s=1, timeout_s=4,
+                               reset_after_no_ack_s=5)
+        link.connect()
+
+        async def scenario():
+            task = real_asyncio.ensure_future(hb.run())
+            try:
+                while hb._awaiting_seq is None:
+                    await spin(1)
+                link._client.inbox.append(
+                    (b"hb/ack", json.dumps({"seq": 1}).encode()))
+                link._client.check_msg()
+                await spin(6)
+                self.assertFalse(task.done())
+            finally:
+                task.cancel()
+
+        real_asyncio.run(scenario())
+        self.assertEqual(firsts, [1])
+
     def test_reconnect_clears_inflight_heartbeat(self):
         link = make_link()
         hb, firsts = self.make(link)
