@@ -29,12 +29,12 @@ bool validArtifactName(const String& name) {
 }
 
 String digestHex(const uint8_t digest[32]) {
-  static constexpr char HEX[] = "0123456789abcdef";
+  static constexpr char HEX_DIGITS[] = "0123456789abcdef";
   String value;
   value.reserve(64);
   for (size_t i = 0; i < 32; ++i) {
-    value += HEX[digest[i] >> 4];
-    value += HEX[digest[i] & 0x0f];
+    value += HEX_DIGITS[digest[i] >> 4];
+    value += HEX_DIGITS[digest[i] & 0x0f];
   }
   return value;
 }
