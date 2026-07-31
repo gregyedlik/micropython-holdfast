@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gregyedlik/micropython-holdfast/spec/arduino-binary-manifest.schema.json",
+  "title": "Holdfast Arduino binary OTA manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "version", "target", "firmware"],
+  "properties": {
+    "schema": { "const": 1 },
+    "version": { "type": "integer", "minimum": 1 },
+    "target": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+    "firmware": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "size", "sha256"],
+      "properties": {
+        "file": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+        "size": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" }
+      }
+    }
+  }
+}

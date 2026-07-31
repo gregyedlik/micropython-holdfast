@@ -95,6 +95,8 @@ then safe.
 
 ## OTA server contract
 
+### MicroPython
+
 Any HTTP server works. Expose two endpoints under a base URL of your choice:
 
 ```
@@ -107,6 +109,61 @@ names conservatively and always refuses `config.py`. Release flow: copy the
 new files where the server serves them, bump `version` in the manifest —
 every device installs it at its next check, reboots, and rolls back by
 itself if the new code can't boot.
+
+### Arduino / ESP32
+
+The same repository also contains an additive Arduino library under
+`arduino/src`. Existing MicroPython projects, imports, manifests, and git
+submodules do not change. PlatformIO discovers the Arduino part through the
+root `library.json` when this repository is added as a dependency or submodule.
+
+```cpp
+#include <HoldfastOTA.h>
+
+holdfast::OtaUpdater updater({
+  .baseUrl = "https://example.test/api/ota/device-1",
+  .target = "my-esp32-target",
+  .authToken = shortLivedToken,
+  .rootCa = rootCa,
+  .currentVersion = 7,
+});
+
+if (updater.checkAndUpdate() == holdfast::OtaResult::Installed) {
+  holdfast::OtaUpdater::reboot();
+}
+```
+
+Binary releases use a separate, explicit manifest shape so they cannot be
+mistaken for MicroPython file releases:
+
+```json
+{
+  "schema": 1,
+  "version": 8,
+  "target": "my-esp32-target",
+  "firmware": {
+    "file": "firmware.bin",
+    "size": 987654,
+    "sha256": "..."
+  }
+}
+```
+
+Build the directory served by those endpoints with the shared release tool:
+
+```sh
+python3 holdfast/tools/build_release.py binary \
+  --binary firmware/.pio/build/esp32c3/firmware.bin \
+  --output server/firmware/device-1 \
+  --version 8 \
+  --target my-esp32-target
+```
+
+On ESP32, Holdfast writes the complete image to the inactive OTA partition and
+verifies its size and SHA-256 before activating it. Enable the ESP-IDF rollback
+option and call `OtaUpdater::markBootOk()` only after the new firmware has
+completed an application-level health check (for example, an ACKed MQTT
+heartbeat). A bad image then rolls back without inventing a second boot scheme.
 
 ## Failure-handling philosophy
 
