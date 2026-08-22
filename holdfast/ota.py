@@ -19,8 +19,10 @@ Manifest file names may use one subdirectory level (e.g. "holdfast/net.py");
 the directory is created on the device as needed. "config.py" is never
 touched — per-device configuration survives every update.
 
-No external dependencies — raw socket + ssl for HTTP(S), HTTP/1.0 so the
-server closes the connection and no chunked encoding is involved.
+No external dependencies — raw socket + ssl for HTTPS, HTTP/1.0 so the
+server closes the connection and no chunked encoding is involved. A trusted
+CA certificate is required and the device clock must be synchronized before
+any network request is made.
 """
 
 import os
@@ -31,7 +33,10 @@ import machine
 import time
 
 _STATE_FILE = "ota_state.json"
+_STATE_TEMP_FILE = "ota_state.json.tmp"
+_STATE_PREVIOUS_FILE = "ota_state.json.prev"
 _MAX_BOOT_ATTEMPTS = 3
+_MIN_TLS_YEAR = 2024
 
 
 # ---------------------------------------------------------------------------
@@ -40,16 +45,48 @@ _MAX_BOOT_ATTEMPTS = 3
 
 def read_state():
     """Load OTA state from flash. Returns defaults if missing."""
-    try:
-        with open(_STATE_FILE, "r") as f:
-            return json.load(f)
-    except Exception:
-        return {"version": 0, "boot_attempts": 0, "version_verified": -1}
+    for filename in (_STATE_FILE, _STATE_PREVIOUS_FILE):
+        try:
+            with open(filename, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"version": 0, "boot_attempts": 0, "version_verified": -1}
 
 
 def _write_state(state):
-    with open(_STATE_FILE, "w") as f:
+    with open(_STATE_TEMP_FILE, "w") as f:
         json.dump(state, f)
+        try:
+            f.flush()
+        except Exception:
+            pass
+    try:
+        os.sync()
+    except Exception:
+        pass
+
+    try:
+        os.remove(_STATE_PREVIOUS_FILE)
+    except OSError:
+        pass
+    try:
+        os.rename(_STATE_FILE, _STATE_PREVIOUS_FILE)
+    except OSError:
+        pass
+    try:
+        os.rename(_STATE_TEMP_FILE, _STATE_FILE)
+    except Exception:
+        # Keep the previous valid state recoverable if the final rename fails.
+        try:
+            os.rename(_STATE_PREVIOUS_FILE, _STATE_FILE)
+        except OSError:
+            pass
+        raise
+    try:
+        os.remove(_STATE_PREVIOUS_FILE)
+    except OSError:
+        pass
 
 
 def local_version():
@@ -105,6 +142,29 @@ def _iter_bak_files():
             yield entry
 
 
+def _remove_bak_files():
+    for bak in _iter_bak_files():
+        try:
+            os.remove(bak)
+        except OSError:
+            pass
+
+
+def _path_exists(path):
+    try:
+        os.stat(path)
+        return True
+    except OSError:
+        return False
+
+
+def _clear_update_transaction(state):
+    for key in ("update_in_progress", "previous_version",
+                "previous_version_verified", "update_files",
+                "added_files", "obsolete_files"):
+        state.pop(key, None)
+
+
 # ---------------------------------------------------------------------------
 # Boot-time helpers (rollback protection), called from boot.py
 # ---------------------------------------------------------------------------
@@ -136,6 +196,19 @@ def rollback(wdt=None):
     print("[ota] ROLLBACK — restoring previous firmware")
     state = read_state()
 
+    # Files first introduced by the failed version have no .bak to restore.
+    # Remove only the exact, validated paths recorded before activation.
+    for fname in state.get("added_files", []):
+        if not valid_fname(fname):
+            continue
+        try:
+            os.remove(fname)
+            print("[ota]   removed new file %s" % fname)
+        except OSError:
+            pass
+        if wdt:
+            wdt.feed()
+
     for bak in _iter_bak_files():
         original = bak[:-4]
         try:
@@ -150,8 +223,25 @@ def rollback(wdt=None):
         except Exception as exc:
             print("[ota]   failed to restore %s: %s" % (original, exc))
 
-    state["version"] = max(0, state.get("version", 1) - 1)
+    for fname in state.get("update_files", []):
+        if not valid_fname(fname):
+            continue
+        try:
+            os.remove(fname + ".new")
+        except OSError:
+            pass
+
+    previous_version = state.get("previous_version")
+    if not isinstance(previous_version, int):
+        # Compatibility with OTA state written before transaction metadata
+        # existed. Old releases advanced one version at a time.
+        previous_version = max(0, state.get("version", 1) - 1)
+    state["version"] = previous_version
+    previous_verified = state.get("previous_version_verified")
+    if isinstance(previous_verified, int):
+        state["version_verified"] = previous_verified
     state["boot_attempts"] = 0
+    _clear_update_transaction(state)
     _write_state(state)
     print("[ota] rollback complete (now v%d)" % state["version"])
 
@@ -163,27 +253,44 @@ def mark_boot_ok():
     state = read_state()
     current_ver = state.get("version", 0)
     if (state.get("boot_attempts", 0) == 0
-            and state.get("version_verified", -1) == current_ver):
+            and state.get("version_verified", -1) == current_ver
+            and not state.get("update_files")):
         return  # already verified
+
+    update_files = state.get("update_files")
+    if isinstance(update_files, list):
+        state["installed_files"] = update_files
+    for fname in state.get("obsolete_files", []):
+        if not valid_fname(fname):
+            continue
+        try:
+            os.remove(fname)
+            print("[ota]   removed obsolete file %s" % fname)
+        except OSError:
+            pass
 
     state["boot_attempts"] = 0
     state["version_verified"] = current_ver
+    _clear_update_transaction(state)
     _write_state(state)
     print("[ota] boot marked OK — v%d verified" % current_ver)
-    for bak in _iter_bak_files():
-        try:
-            os.remove(bak)
-        except OSError:
-            pass
+    _remove_bak_files()
 
 
 def boot_check():
     """The entire boot.py duty: count the attempt, roll back if needed.
     Never raises — a broken OTA module must not brick the device."""
     try:
+        if read_state().get("update_in_progress"):
+            print("[boot] interrupted OTA activation — rolling back!")
+            rollback()
+            return
         attempts = increment_boot_attempts()
         if attempts == 0:
             print("[boot] verified firmware — clean boot")
+            # A reset after the verified-state commit but before backup cleanup
+            # is harmless; finish that cleanup on the next boot.
+            _remove_bak_files()
         else:
             print("[boot] unverified firmware — attempt #%d" % attempts)
         if needs_rollback():
@@ -206,27 +313,36 @@ class OTA:
         <base_url>/files/<name>    raw file content
     """
 
-    def __init__(self, base_url, wdt=None):
+    def __init__(self, base_url, ca_cert, wdt=None):
         self._base_url = base_url.rstrip("/")
+        if not self._base_url.startswith("https://"):
+            raise ValueError("OTA base URL must use https")
+        if not ca_cert:
+            raise ValueError("OTA trusted CA certificate is required")
+        self._ca_cert = ca_cert
         self._wdt = wdt
 
     def _feed(self):
         if self._wdt:
             self._wdt.feed()
 
-    # -- minimal HTTP(S) GET, HTTP/1.0, no chunked encoding -----------------
+    def clock_is_valid(self):
+        """TLS certificate dates cannot be checked before NTP has set RTC."""
+        try:
+            return time.localtime()[0] >= _MIN_TLS_YEAR
+        except Exception:
+            return False
+
+    # -- minimal HTTPS GET, HTTP/1.0, no chunked encoding -------------------
 
     def _http_get(self, url):
-        if url.startswith("https://"):
-            rest = url[8:]
-            tls = True
-            port = 443
-        elif url.startswith("http://"):
-            rest = url[7:]
-            tls = False
-            port = 80
-        else:
-            raise ValueError("unsupported url scheme")
+        if not url.startswith("https://"):
+            raise ValueError("OTA requests require https")
+        if not self.clock_is_valid():
+            raise OSError("clock is not synchronized; TLS verification unavailable")
+
+        rest = url[8:]
+        port = 443
 
         slash = rest.find("/")
         if slash < 0:
@@ -243,8 +359,12 @@ class OTA:
         sock.settimeout(15)
         try:
             sock.connect(addr)
-            if tls:
-                sock = ssl.wrap_socket(sock, server_hostname=host)
+            sock = ssl.wrap_socket(
+                sock,
+                cert_reqs=ssl.CERT_REQUIRED,
+                cadata=self._ca_cert,
+                server_hostname=host,
+            )
             self._feed()
 
             req = "GET %s HTTP/1.0\r\nHost: %s\r\nConnection: close\r\n\r\n" % (path, host)
@@ -312,6 +432,9 @@ class OTA:
             if not valid_fname(fname):
                 print("[ota] rejecting manifest with bad file name: %r" % fname)
                 return False
+        if len(files) != len(set(files)):
+            print("[ota] rejecting manifest with duplicate file names")
+            return False
 
         print("[ota] update available: v%d -> v%d (%d files)"
               % (current, remote, len(files)))
@@ -330,14 +453,29 @@ class OTA:
                 self._cleanup_new(files)
                 return False
 
+        # Record enough information to undo a version jump, a newly introduced
+        # file, or a power loss at any point during activation.
+        installed_files = state.get("installed_files", [])
+        if not isinstance(installed_files, list):
+            installed_files = []
+        state["update_in_progress"] = True
+        state["previous_version"] = current
+        state["previous_version_verified"] = state.get("version_verified", -1)
+        state["update_files"] = files
+        state["added_files"] = [f for f in files if not _path_exists(f)]
+        state["obsolete_files"] = [
+            f for f in installed_files
+            if valid_fname(f) and f != "config.py" and f not in files
+        ]
+        _write_state(state)
+
         # Phase 2: back up current files and activate the new ones.
         print("[ota] activating update")
+        added_files = state.get("added_files", [])
         for fname in files:
             try:
-                try:
+                if fname not in added_files:
                     os.rename(fname, fname + ".bak")
-                except OSError:
-                    pass  # file didn't exist before this version
                 os.rename(fname + ".new", fname)
             except Exception as exc:
                 print("[ota] activation failed for %s: %s" % (fname, exc))
@@ -347,6 +485,7 @@ class OTA:
         # Phase 3: record the new (unverified) version and reboot.
         state["version"] = remote
         state["boot_attempts"] = 0
+        state["update_in_progress"] = False
         _write_state(state)
         print("[ota] update complete — rebooting in 3s")
         time.sleep(3)
@@ -359,12 +498,17 @@ class OTA:
         await asyncio.sleep(initial_delay_s)
         while True:
             self._feed()
-            if wifi is None or wifi.isconnected():
+            network_ready = wifi is None or wifi.isconnected()
+            if network_ready and self.clock_is_valid():
                 try:
                     self.check_and_update()
                 except Exception as exc:
                     print("[ota] check failed:", exc)
-            await asyncio.sleep(interval_s)
+                await asyncio.sleep(interval_s)
+            else:
+                if network_ready:
+                    print("[ota] waiting for synchronized clock")
+                await asyncio.sleep(30)
 
     # -- helpers -------------------------------------------------------------
 
@@ -376,12 +520,5 @@ class OTA:
                 pass
 
     def _undo_activation(self, files):
-        for fname in files:
-            try:
-                os.rename(fname + ".bak", fname)
-            except OSError:
-                pass
-            try:
-                os.remove(fname + ".new")
-            except OSError:
-                pass
+        rollback(self._wdt)
+        self._cleanup_new(files)

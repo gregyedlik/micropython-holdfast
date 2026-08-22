@@ -39,7 +39,7 @@ lost it, update itself remotely, and recover from its own bad updates.
   `action`, dispatch them to registered handlers, suppress duplicate command
   IDs, and publish retained command status.
 - **OTA updates with rollback** (`holdfast.ota`) — manifest-driven file
-  updates over raw-socket HTTP(S), all-or-nothing download, `.bak` backups,
+  updates over certificate-verified HTTPS, all-or-nothing download, `.bak` backups,
   and boot-attempt counting: if a new version fails to boot 3 times, the
   previous version is restored automatically. A version is only "verified"
   once your app calls `mark_boot_ok()` — wire that to your first successful
@@ -75,7 +75,7 @@ every holdfast app:
 ```python
 wifi = WifiManager(SSID, PASS, led=led, wdt=wdt)
 link = MqttLink(HOST, PORT, client_id=..., topic_prefix=..., wdt=wdt)
-updater = ota.OTA(OTA_BASE, wdt=wdt)
+updater = ota.OTA(OTA_BASE, ca_cert=OTA_CA_CERT, wdt=wdt)
 
 supervisor.run([
     ("manager",   link.manager_task(wifi)),       # keeps WiFi + MQTT alive
@@ -97,7 +97,10 @@ then safe.
 
 ### MicroPython
 
-Any HTTP server works. Expose two endpoints under a base URL of your choice:
+Any HTTPS server works. Pass a trusted root CA certificate in PEM or DER format
+when constructing `OTA`; plain HTTP and unverified HTTPS are rejected. The
+device clock must be synchronized for certificate validity checks. Expose two
+endpoints under a base URL of your choice:
 
 ```
 GET <base>/manifest        -> {"version": 7, "files": ["main.py", "holdfast/net.py", ...]}

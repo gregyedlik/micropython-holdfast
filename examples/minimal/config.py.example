@@ -12,4 +12,8 @@ TOPIC_PREFIX = "demo/device1"
 
 # Server exposing <OTA_BASE>/manifest and <OTA_BASE>/files/<name>
 OTA_BASE = "https://example.org/api/ota/demo"
+OTA_CA_CERT = b"""-----BEGIN CERTIFICATE-----
+replace this text with the PEM certificate for a trusted root CA
+-----END CERTIFICATE-----
+"""
 OTA_CHECK_INTERVAL = 21600  # seconds

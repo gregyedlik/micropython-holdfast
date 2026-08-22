@@ -23,7 +23,7 @@ link = MqttLink(config.MQTT_HOST, config.MQTT_PORT,
                 client_id=config.TOPIC_PREFIX.replace("/", "-"),
                 user=config.MQTT_USER, password=config.MQTT_PASS,
                 topic_prefix=config.TOPIC_PREFIX, wdt=wdt)
-updater = ota.OTA(config.OTA_BASE, wdt=wdt)
+updater = ota.OTA(config.OTA_BASE, ca_cert=config.OTA_CA_CERT, wdt=wdt)
 
 link.set_meta("_version", ota.local_version())
 
