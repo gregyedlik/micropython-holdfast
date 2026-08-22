@@ -203,9 +203,10 @@ class TestTlsTransport(unittest.TestCase):
                 ]
                 self.connected = None
                 self.closed = False
+                self.timeout = None
 
-            def settimeout(self, _timeout):
-                pass
+            def settimeout(self, timeout):
+                self.timeout = timeout
 
             def connect(self, address):
                 self.connected = address
@@ -245,6 +246,8 @@ class TestTlsTransport(unittest.TestCase):
         self.assertEqual(captured["cert_reqs"], ota.ssl.CERT_REQUIRED)
         self.assertEqual(captured["cadata"], b"trusted CA")
         self.assertEqual(captured["server_hostname"], "server.test")
+        self.assertEqual(fake_socket.timeout, ota._NETWORK_TIMEOUT_S)
+        self.assertLess(fake_socket.timeout, 8)
         self.assertTrue(fake_socket.closed)
 
 

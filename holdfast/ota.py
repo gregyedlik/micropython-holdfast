@@ -37,6 +37,10 @@ _STATE_TEMP_FILE = "ota_state.json.tmp"
 _STATE_PREVIOUS_FILE = "ota_state.json.prev"
 _MAX_BOOT_ATTEMPTS = 3
 _MIN_TLS_YEAR = 2024
+# Keep blocking TCP/TLS/read socket operations comfortably below the RP2
+# hardware watchdog's roughly eight-second ceiling. The event loop cannot feed
+# the watchdog while MicroPython is inside one of these synchronous calls.
+_NETWORK_TIMEOUT_S = 5
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +360,7 @@ class OTA:
         self._feed()
         addr = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)[0][-1]
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(15)
+        sock.settimeout(_NETWORK_TIMEOUT_S)
         try:
             sock.connect(addr)
             sock = ssl.wrap_socket(

@@ -99,8 +99,11 @@ then safe.
 
 Any HTTPS server works. Pass a trusted root CA certificate in PEM or DER format
 when constructing `OTA`; plain HTTP and unverified HTTPS are rejected. The
-device clock must be synchronized for certificate validity checks. Expose two
-endpoints under a base URL of your choice:
+device clock must be synchronized for certificate validity checks. Blocking
+socket operations use a five-second timeout so an RP2's approximately
+eight-second hardware watchdog remains the final hang guard without routinely
+resetting a device before a timeout can be handled. Expose two endpoints under
+a base URL of your choice:
 
 ```
 GET <base>/manifest        -> {"version": 7, "files": ["main.py", "holdfast/net.py", ...]}
